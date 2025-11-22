@@ -10,10 +10,17 @@ interface GlitchTextProps {
 
 export function GlitchText({ children, className = "", speed = 3000 }: GlitchTextProps) {
   const [displayText, setDisplayText] = useState(children)
+  const [isMounted, setIsMounted] = useState(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const originalText = useRef(children)
 
   useEffect(() => {
+    setIsMounted(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isMounted) return
+
     const chars = "0123456789ABCDEFabcdef█▓▒░▄▀■□▲△●○◉◯◊◇◆"
     
     const glitch = () => {
@@ -40,16 +47,32 @@ export function GlitchText({ children, className = "", speed = 3000 }: GlitchTex
         clearInterval(intervalRef.current)
       }
     }
-  }, [speed])
+  }, [speed, isMounted])
+
+  // Don't render glitch effects until mounted to avoid hydration mismatch
+  if (!isMounted) {
+    return (
+      <span className={`glitch-text ${className}`} style={{ fontVariantLigatures: "none" }}>
+        {children}
+      </span>
+    )
+  }
 
   return (
-    <span className={`glitch-text ${className}`} style={{ fontVariantLigatures: "none" }}>
+    <span 
+      className={`glitch-text ${className}`} 
+      style={{ fontVariantLigatures: "none" }}
+    >
       {displayText.split("").map((char, i) => (
         <span
           key={i}
-          className="inline-block"
+          className="inline-block relative"
           style={{
-            animation: char !== " " && Math.random() < 0.1 ? "glitch-char 0.1s infinite" : "none",
+            textShadow: `
+              0 0 10px rgba(34, 211, 238, 0.3),
+              0 0 20px rgba(34, 211, 238, 0.2),
+              0 0 30px rgba(34, 211, 238, 0.1)
+            `,
           }}
         >
           {char}

@@ -20,11 +20,19 @@ export default function HomePage() {
       {/* Header */}
       <header className="relative z-20 border-b border-white/5">
         <nav className="container-padding max-w-7xl mx-auto py-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <div className="w-8 h-8 border border-accent/50 rounded flex items-center justify-center">
               <Lock className="w-4 h-4 text-accent" />
             </div>
             <span className="text-xl font-bold tracking-tight">Sincerin</span>
+            <div className="flex items-center gap-2">
+              <span className="px-2 py-0.5 text-xs font-mono font-semibold border border-accent/30 bg-accent/5 text-accent rounded">
+                ALPHA
+              </span>
+              <span className="px-2 py-0.5 text-xs font-mono font-semibold border border-orange-500/30 bg-orange-500/5 text-orange-400 rounded">
+                TESTNET
+              </span>
+            </div>
           </div>
           <div className="flex items-center gap-8">
             <Link href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">

@@ -1,22 +1,25 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { CipherWheelLoader } from "@/components/cipher-wheel-loader"
-import { ArrowDown, Info, CheckCircle2, Send, RefreshCw, ArrowUpDown } from "lucide-react"
+import { ArrowDown, Info, CheckCircle2, Send, RefreshCw, ArrowUpDown, AlertCircle } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { GlitchText } from "@/components/glitch-text"
+import { BinaryText } from "@/components/binary-text"
+import { useWallet } from "@/hooks/use-wallet"
+import { getUSDCBalance, transferUSDC, isValidStellarAddress } from "@/lib/stellar"
 
 type ViewMode = "convert" | "transfer"
 
 export default function AppPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("convert")
+  const { address, isConnected } = useWallet()
   
   // Convert state
   const [convertAmount, setConvertAmount] = useState("")
   const [isConverting, setIsConverting] = useState(false)
   const [showConvertSuccess, setShowConvertSuccess] = useState(false)
-  const [publicBalance] = useState("1,234.56")
+  const [publicBalance, setPublicBalance] = useState("0")
   const [privateBalance] = useState("567.89")
 
   // Transfer state
@@ -24,11 +27,34 @@ export default function AppPage() {
   const [recipient, setRecipient] = useState("")
   const [isTransferring, setIsTransferring] = useState(false)
   const [showTransferSuccess, setShowTransferSuccess] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
+  const [txHash, setTxHash] = useState<string | null>(null)
 
   // Metrics
   const [privacyScore] = useState("99.1")
   const [eta] = useState("0.58")
   const [route] = useState("Tier 1")
+
+  // Fetch USDC balance when wallet is connected
+  useEffect(() => {
+    if (isConnected && address) {
+      const fetchBalance = async () => {
+        try {
+          const balance = await getUSDCBalance(address)
+          setPublicBalance(balance)
+        } catch (error) {
+          console.error("Error fetching balance:", error)
+        }
+      }
+      fetchBalance()
+      
+      // Refresh balance every 10 seconds
+      const interval = setInterval(fetchBalance, 10000)
+      return () => clearInterval(interval)
+    } else {
+      setPublicBalance("0")
+    }
+  }, [isConnected, address])
 
   const handleConvert = async () => {
     setIsConverting(true)
@@ -39,12 +65,50 @@ export default function AppPage() {
   }
 
   const handleTransfer = async () => {
+    if (!address || !isConnected) {
+      setTransferError("Please connect your wallet first")
+      return
+    }
+
+    if (!isValidStellarAddress(recipient)) {
+      setTransferError("Invalid Stellar address")
+      return
+    }
+
+    const amount = parseFloat(transferAmount)
+    if (isNaN(amount) || amount <= 0) {
+      setTransferError("Invalid amount")
+      return
+    }
+
+    const balance = parseFloat(publicBalance.replace(/,/g, ""))
+    if (amount > balance) {
+      setTransferError("Insufficient balance")
+      return
+    }
+
     setIsTransferring(true)
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    setIsTransferring(false)
-    setShowTransferSuccess(true)
-    setTransferAmount("")
-    setRecipient("")
+    setTransferError(null)
+    setTxHash(null)
+
+    try {
+      const hash = await transferUSDC(address, recipient, transferAmount)
+      setTxHash(hash)
+      setShowTransferSuccess(true)
+      setTransferAmount("")
+      setRecipient("")
+      
+      // Refresh balance after transfer
+      if (address) {
+        const newBalance = await getUSDCBalance(address)
+        setPublicBalance(newBalance)
+      }
+    } catch (error: any) {
+      console.error("Transfer error:", error)
+      setTransferError(error?.message || "Failed to transfer USDC. Please try again.")
+    } finally {
+      setIsTransferring(false)
+    }
   }
 
   return (
@@ -54,16 +118,28 @@ export default function AppPage() {
       <div className="fixed inset-0 dither-effect pointer-events-none z-0" />
 
       <div className="relative z-10 container-padding max-w-6xl mx-auto py-8 pt-20">
-        {/* Header with Glitch Title */}
+        {/* Header with Enhanced Title */}
         <div className="mb-12 text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-accent/30 bg-accent/5 text-xs font-mono text-accent mb-6">
             <div className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse" />
-            Private Token Converter
+            {viewMode === "convert" ? "Private Token Converter" : "Private Token Transfer"}
           </div>
-          <h1 className="text-4xl md:text-6xl font-bold tracking-tight mb-4">
-            <GlitchText speed={3000} className="glitch-text">
-              Convert to Private Token
-            </GlitchText>
+          
+          {/* Main Title with Binary Effect */}
+          <h1 className="text-4xl md:text-6xl font-bold tracking-tight mb-4 relative">
+            <span className="relative inline-block">
+              {/* Glow effect */}
+              <span className="absolute inset-0 blur-2xl opacity-20 bg-linear-to-r from-accent via-accent/50 to-transparent" />
+              {/* Main text with binary conversion effect */}
+              <BinaryText 
+                text="Convert to Private Token"
+                className="relative z-10"
+                initialDelay={200}
+                letterAnimationDuration={500}
+                letterInterval={100}
+                autoPlay={true}
+              />
+            </span>
           </h1>
         </div>
 
@@ -117,10 +193,11 @@ export default function AppPage() {
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-mono uppercase tracking-wider text-muted-foreground">From</span>
                         <button
-                          onClick={() => setConvertAmount(publicBalance.replace(/,/g, ""))}
-                          className="text-xs text-accent hover:text-accent/80 font-semibold"
+                          onClick={() => setConvertAmount(publicBalance)}
+                          disabled={!isConnected || parseFloat(publicBalance) === 0}
+                          className="text-xs text-accent hover:text-accent/80 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          Balance: {publicBalance}
+                          Balance: {parseFloat(publicBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
                         </button>
                       </div>
                       <div className="flex items-center gap-3">
@@ -207,7 +284,9 @@ export default function AppPage() {
                     <div className="p-5 border border-accent/30 rounded-xl bg-accent/5 dither-effect hover:border-accent/50 transition-colors">
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-mono uppercase tracking-wider text-accent">From (Private)</span>
-                        <span className="text-xs text-accent/80">Balance: {privateBalance}</span>
+                        <span className="text-xs text-accent/80">
+                          Balance: {parseFloat(publicBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
+                        </span>
                       </div>
                       <div className="flex items-center gap-3">
                         <div className="flex items-center gap-3">
@@ -225,14 +304,16 @@ export default function AppPage() {
                             value={transferAmount}
                             onChange={(e) => setTransferAmount(e.target.value)}
                             placeholder="0.0"
+                            step="0.0000001"
                             className="w-full text-3xl font-semibold text-accent bg-transparent border-none outline-none text-right placeholder:text-accent/30"
                           />
                         </div>
                       </div>
                       <div className="mt-2 flex justify-end">
                         <button
-                          onClick={() => setTransferAmount(privateBalance.replace(/,/g, ""))}
-                          className="px-3 py-1 text-xs font-semibold text-accent hover:bg-accent/10 rounded-lg transition-colors"
+                          onClick={() => setTransferAmount(publicBalance)}
+                          disabled={!isConnected || parseFloat(publicBalance) === 0}
+                          className="px-3 py-1 text-xs font-semibold text-accent hover:bg-accent/10 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           MAX
                         </button>
@@ -271,18 +352,37 @@ export default function AppPage() {
                       </div>
                     </div>
 
+                    {/* Error Message */}
+                    {transferError && (
+                      <div className="p-3 border border-destructive/30 rounded-lg bg-destructive/10 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        <p className="text-xs text-destructive">{transferError}</p>
+                      </div>
+                    )}
+
                     {/* Info */}
-                    <div className="p-3 border border-accent/20 rounded-lg bg-accent/5 flex items-start gap-2">
-                      <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                      <p className="text-xs text-muted-foreground">
-                        This transfer is completely private and untraceable using zero-knowledge cryptography.
-                      </p>
-                    </div>
+                    {!transferError && (
+                      <div className="p-3 border border-accent/20 rounded-lg bg-accent/5 flex items-start gap-2">
+                        <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                        <p className="text-xs text-muted-foreground">
+                          {isConnected 
+                            ? "This transfer is completely private and untraceable using zero-knowledge cryptography. (Privacy layer implementation in progress)"
+                            : "Please connect your wallet to transfer private USDC tokens."}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Transfer Button */}
                     <Button
                       onClick={handleTransfer}
-                      disabled={!transferAmount || !recipient || parseFloat(transferAmount) <= 0 || isTransferring}
+                      disabled={
+                        !isConnected ||
+                        !transferAmount || 
+                        !recipient || 
+                        parseFloat(transferAmount) <= 0 || 
+                        isTransferring ||
+                        !isValidStellarAddress(recipient)
+                      }
                       className="w-full bg-accent text-accent-foreground hover:bg-accent/90 h-12 text-base font-semibold rounded-xl"
                     >
                       {isTransferring ? (
@@ -290,6 +390,8 @@ export default function AppPage() {
                           <CipherWheelLoader className="w-5 h-5" />
                           Sending Privately...
                         </span>
+                      ) : !isConnected ? (
+                        "Connect Wallet to Transfer"
                       ) : (
                         "Send Privately"
                       )}
@@ -365,9 +467,25 @@ export default function AppPage() {
               <p className="text-xs font-mono text-muted-foreground mb-2">TRANSFERRED</p>
               <p className="text-2xl font-bold font-mono">{transferAmount} USDC</p>
               <p className="text-xs text-accent font-mono mt-2">✓ Zero-Knowledge Transfer</p>
+              {txHash && (
+                <div className="mt-3 pt-3 border-t border-white/5">
+                  <p className="text-xs font-mono text-muted-foreground mb-1">TRANSACTION HASH</p>
+                  <a
+                    href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-mono text-accent hover:underline break-all"
+                  >
+                    {txHash}
+                  </a>
+                </div>
+              )}
             </div>
             <Button
-              onClick={() => setShowTransferSuccess(false)}
+              onClick={() => {
+                setShowTransferSuccess(false)
+                setTxHash(null)
+              }}
               className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
             >
               Close
