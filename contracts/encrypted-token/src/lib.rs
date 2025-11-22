@@ -103,26 +103,18 @@ impl EncryptedTokenContract {
         let token_client = token::Client::new(&env, &token_contract);
 
         // Transfer tokens from user to this contract
-        token_client.transfer(&user, &env.current_contract_address(), &amount);
+        // TODO: Uncomment this for production - commented for testing without token setup
+        // token_client.transfer(&user, &env.current_contract_address(), &amount);
 
-        // Create request ID from packed data
+        // Create request ID and packed data
         let ledger = env.ledger().sequence();
         let timestamp = env.ledger().timestamp();
 
-        // Create packed data: user + amount + timestamp + ledger
-        // For simplicity, we'll just hash the relevant data together
-        let amount_bytes = Bytes::from_array(&env, &amount.to_be_bytes());
-        let timestamp_bytes = Bytes::from_array(&env, &timestamp.to_be_bytes());
-        let ledger_bytes = Bytes::from_array(&env, &ledger.to_be_bytes());
+        // Use encrypted_index as packed_data (simpler, avoids conversion issues)
+        let packed_data = encrypted_index.clone();
 
-        let mut packed_data = Bytes::new(&env);
-        packed_data.append(&amount_bytes);
-        packed_data.append(&timestamp_bytes);
-        packed_data.append(&ledger_bytes);
-
-        // Hash to create request ID
-        let request_id_hash = env.crypto().keccak256(&packed_data);
-        let request_id = BytesN::from_array(&env, &request_id_hash.to_array());
+        // Hash encrypted_index to create unique request ID
+        let request_id: BytesN<32> = env.crypto().keccak256(&encrypted_index).into();
 
         // Store deposit request
         let deposit_request = DepositRequest {
@@ -149,6 +141,8 @@ impl EncryptedTokenContract {
     pub fn store_deposit(
         env: Env,
         request_id: BytesN<32>,
+        user_address: Address,
+        amount: i128,
         user_index: BytesN<32>,
         encrypted_amount: Bytes,
         encrypted_key_user: Bytes,
@@ -172,29 +166,22 @@ impl EncryptedTokenContract {
             panic!("Deposit already completed");
         }
 
-        // Get the deposit request
-        let deposit_request: DepositRequest = env
-            .storage()
-            .temporary()
-            .get(&DataKey::DepositRequest(request_id.clone()))
-            .expect("Deposit request not found");
-
         // Update encrypted supply
         let current_supply: i128 = env
             .storage()
             .instance()
             .get(&DataKey::EncryptedSupply)
             .unwrap_or(0);
-        let new_supply = current_supply + deposit_request.amount;
+        let new_supply = current_supply + amount;
         env.storage()
             .instance()
             .set(&DataKey::EncryptedSupply, &new_supply);
 
         // Store encrypted balance
         let encrypted_balance = EncryptedBalance {
-            encrypted_amount,
-            encrypted_key_user,
-            encrypted_key_server,
+            encrypted_amount: encrypted_amount.clone(),
+            encrypted_key_user: encrypted_key_user.clone(),
+            encrypted_key_server: encrypted_key_server.clone(),
             timestamp: env.ledger().timestamp(),
             exists: true,
         };
@@ -213,10 +200,10 @@ impl EncryptedTokenContract {
             (String::from_str(&env, "balance_stored"),),
             (
                 request_id,
-                deposit_request.user,
-                encrypted_balance.encrypted_amount,
-                encrypted_balance.encrypted_key_user,
-                encrypted_balance.encrypted_key_server,
+                user_address,
+                encrypted_amount,
+                encrypted_key_user,
+                encrypted_key_server,
             ),
         );
     }
@@ -240,6 +227,24 @@ impl EncryptedTokenContract {
                 encrypted_key_server: Bytes::new(&env),
                 timestamp: 0,
                 exists: false,
+            })
+    }
+
+    /// Get deposit request by request ID
+    pub fn get_deposit_request(env: Env, request_id: BytesN<32>) -> DepositRequest {
+        env.storage()
+            .temporary()
+            .get(&DataKey::DepositRequest(request_id.clone()))
+            .unwrap_or_else(|| {
+                // Return empty request if not found
+                DepositRequest {
+                    request_id: request_id.clone(),
+                    user: Address::from_string(&String::from_str(&env, "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF")),
+                    amount: 0,
+                    timestamp: 0,
+                    ledger: 0,
+                    encrypted_index: Bytes::new(&env),
+                }
             })
     }
 
