@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { CryptoBackground } from "@/components/crypto-background"
 import { ArrowRight, Lock, Zap, Shield } from "lucide-react"
 import { LandingWrapper } from "@/components/landing-wrapper"
+import { MetricsDashboard } from "@/components/metrics-dashboard"
 
 export default function HomePage() {
   return (
@@ -51,50 +52,45 @@ export default function HomePage() {
 
       {/* Hero Section */}
       <section className="relative z-20 page-container py-24 lg:py-32">
-        <div className="max-w-4xl mx-auto text-center">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-accent/30 bg-accent/5 text-xs font-mono text-accent mb-8">
-            <div className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse" />
-            Zero-Knowledge Privacy Protocol
-          </div>
-
-          <h1 className="text-5xl lg:text-7xl font-bold tracking-tight mb-6 text-balance">
-            Private Token Transfers
-            <br />
-            <span className="text-muted-foreground">on Stellar.</span>
-          </h1>
-
-          <p className="text-lg lg:text-xl text-muted-foreground mb-12 max-w-2xl mx-auto text-pretty leading-relaxed">
-            Convert any Stellar token into a private token. Transfer with zero trace using Soroban smart contracts. Full
-            confidentiality through cryptographic privacy layers.
-          </p>
-
-          <div className="flex items-center justify-center gap-4">
-            <Button asChild size="lg" className="bg-foreground text-background hover:bg-foreground/90 group">
-              <Link href="/app">
-                Launch App
-                <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
-              </Link>
-            </Button>
-            <Button
-              asChild
-              size="lg"
-              variant="outline"
-              className="border-accent/30 hover:bg-accent/10 hover:border-accent bg-transparent"
-            >
-              <Link href="#how-it-works">Learn More</Link>
-            </Button>
-          </div>
-
-          {/* Crypto grid decoration */}
-          <div className="mt-16 relative h-32 crypto-grid rounded-lg border border-accent/10 overflow-hidden">
-            <div className="absolute inset-0 bg-linear-to-t from-[#050505] to-transparent" />
-            <div className="absolute inset-0 flex items-center justify-center gap-8 font-mono text-xs text-accent/40">
-              <span className="animate-pulse">0x7f3e9...</span>
-              <span className="animate-pulse delay-100">→</span>
-              <span className="animate-pulse delay-200">zkPrivacy</span>
-              <span className="animate-pulse delay-300">→</span>
-              <span className="animate-pulse delay-400">0x2c8a1...</span>
+        <div className="grid lg:grid-cols-2 gap-12 items-center">
+          {/* Left: Text Content */}
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-accent/30 bg-accent/5 text-xs font-mono text-accent mb-6">
+              <div className="w-1.5 h-1.5 bg-accent rounded-full animate-pulse" />
+              Zero-Knowledge Privacy Protocol
             </div>
+
+            <h1 className="text-4xl lg:text-6xl font-bold tracking-tight mb-6 text-balance">
+              Private Token Transfers
+              <br />
+              <span className="text-muted-foreground">on Stellar.</span>
+            </h1>
+
+            <p className="text-lg text-muted-foreground mb-8 max-w-xl text-pretty leading-relaxed">
+              Convert any Stellar token into a private token. Transfer with zero trace using Soroban smart contracts. Full confidentiality through cryptographic privacy layers.
+            </p>
+
+            <div className="flex items-center gap-4">
+              <Button asChild size="lg" className="bg-foreground text-background hover:bg-foreground/90 group">
+                <Link href="/app">
+                  Launch App
+                  <ArrowRight className="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </Link>
+              </Button>
+              <Button
+                asChild
+                size="lg"
+                variant="outline"
+                className="border-accent/30 hover:bg-accent/10 hover:border-accent bg-transparent"
+              >
+                <Link href="#how-it-works">Learn More</Link>
+              </Button>
+            </div>
+          </div>
+
+          {/* Right: Metrics Dashboard */}
+          <div>
+            <MetricsDashboard />
           </div>
         </div>
       </section>

@@ -3,14 +3,11 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
-import { Lock, RefreshCw, Send, ArrowDownToLine, Activity } from "lucide-react"
-import { ConnectWalletButton } from "@/components/ConnectWalletButton"
+import { Lock, RefreshCw } from "lucide-react"
+import { WalletConnect } from "@/components/wallet-connect"
 
 const navItems = [
-  { href: "/app", label: "Dashboard", icon: Activity },
-  { href: "/app/convert", label: "Convert", icon: RefreshCw },
-  { href: "/app/transfer", label: "Transfer", icon: Send },
-  { href: "/app/withdraw", label: "Withdraw", icon: ArrowDownToLine },
+  { href: "/app", label: "Swap", icon: RefreshCw },
 ]
 
 export function AppNav() {
@@ -27,7 +24,7 @@ export function AppNav() {
         </Link>
 
         <div className="mb-8">
-          <ConnectWalletButton />
+          <WalletConnect />
         </div>
 
         <div className="space-y-2">
@@ -66,7 +63,7 @@ export function AppNav() {
               <div className="w-2 h-2 bg-accent rounded-full animate-pulse" />
               <span className="text-xs font-mono text-accent">STELLAR NETWORK</span>
             </div>
-            <p className="text-xs text-muted-foreground">Connected to Mainnet</p>
+            <p className="text-xs text-muted-foreground">Connected to Local</p>
           </div>
         </div>
       </div>

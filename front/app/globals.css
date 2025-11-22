@@ -55,8 +55,6 @@
 }
 
 @theme inline {
-  --font-sans: "Geist", "Geist Fallback";
-  --font-mono: "Geist Mono", "Geist Mono Fallback";
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -88,6 +86,10 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+  }
+  .font-mono {
+    font-family: var(--font-mono);
   }
 }
 
@@ -141,4 +143,50 @@
     color: oklch(0.8 0.15 195);
     text-shadow: 0 0 8px oklch(0.8 0.15 195 / 0.5);
   }
+
+  /* Glitch animation */
+  @keyframes glitch-char {
+    0%, 100% {
+      transform: translate(0);
+    }
+    20% {
+      transform: translate(-1px, 1px);
+    }
+    40% {
+      transform: translate(-1px, -1px);
+    }
+    60% {
+      transform: translate(1px, 1px);
+    }
+    80% {
+      transform: translate(1px, -1px);
+    }
+  }
+
+  /* Letter spacing animation for glitch effect */
+  .glitch-text {
+    letter-spacing: 0.05em;
+    font-variant-ligatures: none;
+  }
+}
+
+/* Stellar Wallets Kit Modal Styles - Ensure modal is visible */
+[data-stellar-wallets-kit-modal],
+.stellar-wallets-kit-modal,
+#stellar-wallets-kit-modal,
+.swk-modal,
+[class*="swk"],
+[class*="stellar-wallets"] {
+  z-index: 9999 !important;
+  position: fixed !important;
+}
+
+/* Ensure modal content is visible */
+[data-stellar-wallets-kit-modal] *,
+.stellar-wallets-kit-modal *,
+#stellar-wallets-kit-modal *,
+.swk-modal *,
+[class*="swk"] * {
+  visibility: visible !important;
+  opacity: 1 !important;
 }
