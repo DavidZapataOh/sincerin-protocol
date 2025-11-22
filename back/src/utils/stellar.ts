@@ -1,11 +1,11 @@
-import { Contract, Keypair, SorobanRpc, xdr, scValToNative } from '@stellar/stellar-sdk';
+import { Contract, Keypair, rpc, xdr, scValToNative } from '@stellar/stellar-sdk';
 import { ParsedEvent } from '../types';
 
 export class StellarUtils {
   /**
    * Parse raw Stellar event into a more usable format
    */
-  static parseEvent(event: SorobanRpc.Api.EventResponse): ParsedEvent {
+  static parseEvent(event: rpc.Api.EventResponse): ParsedEvent {
     return {
       id: event.id,
       type: event.type,
