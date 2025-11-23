@@ -7,7 +7,7 @@ import { ArrowDown, Info, CheckCircle2, Send, RefreshCw, ArrowUpDown, AlertCircl
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { BinaryText } from "@/components/binary-text"
 import { useWallet } from "@/hooks/use-wallet"
-import { getUSDCBalance, transferUSDC, isValidStellarAddress } from "@/lib/stellar"
+import { getUSDCBalance, transferUSDC, isValidStellarAddress, convertToPrivate, getPrivateBalance } from "@/lib/stellar"
 
 type ViewMode = "convert" | "transfer"
 
@@ -19,8 +19,10 @@ export default function AppPage() {
   const [convertAmount, setConvertAmount] = useState("")
   const [isConverting, setIsConverting] = useState(false)
   const [showConvertSuccess, setShowConvertSuccess] = useState(false)
+  const [convertError, setConvertError] = useState<string | null>(null)
+  const [convertTxHash, setConvertTxHash] = useState<string | null>(null)
   const [publicBalance, setPublicBalance] = useState("0")
-  const [privateBalance] = useState("567.89")
+  const [privateBalance, setPrivateBalance] = useState("0")
 
   // Transfer state
   const [transferAmount, setTransferAmount] = useState("")
@@ -38,30 +40,72 @@ export default function AppPage() {
   // Fetch USDC balance when wallet is connected
   useEffect(() => {
     if (isConnected && address) {
-      const fetchBalance = async () => {
+      const fetchBalances = async () => {
         try {
-          const balance = await getUSDCBalance(address)
-          setPublicBalance(balance)
+          // Fetch public balance
+          const publicBal = await getUSDCBalance(address)
+          setPublicBalance(publicBal)
+          
+          // Fetch private balance
+          const privateBal = await getPrivateBalance(address)
+          setPrivateBalance(privateBal)
         } catch (error) {
-          console.error("Error fetching balance:", error)
+          console.error("Error fetching balances:", error)
         }
       }
-      fetchBalance()
+      fetchBalances()
       
-      // Refresh balance every 10 seconds
-      const interval = setInterval(fetchBalance, 10000)
+      // Refresh balances every 10 seconds
+      const interval = setInterval(fetchBalances, 10000)
       return () => clearInterval(interval)
     } else {
       setPublicBalance("0")
+      setPrivateBalance("0")
     }
   }, [isConnected, address])
 
   const handleConvert = async () => {
+    if (!address || !isConnected) {
+      return
+    }
+
+    const amount = parseFloat(convertAmount)
+    if (isNaN(amount) || amount <= 0) {
+      return
+    }
+
+    const balance = parseFloat(publicBalance.replace(/,/g, ""))
+    if (amount > balance) {
+      return
+    }
+
     setIsConverting(true)
-    await new Promise((resolve) => setTimeout(resolve, 3000))
-    setIsConverting(false)
-    setShowConvertSuccess(true)
-    setConvertAmount("")
+    setConvertError(null)
+    setConvertTxHash(null)
+
+    try {
+      const hash = await convertToPrivate(address, convertAmount)
+      setConvertTxHash(hash)
+      setShowConvertSuccess(true)
+      setConvertAmount("")
+      
+      // Refresh balances after conversion
+      if (address) {
+        const newPublicBalance = await getUSDCBalance(address)
+        setPublicBalance(newPublicBalance)
+        
+        // Also refresh private balance (may take a moment for backend to process)
+        setTimeout(async () => {
+          const newPrivateBalance = await getPrivateBalance(address)
+          setPrivateBalance(newPrivateBalance)
+        }, 5000) // Wait 5 seconds for backend to process
+      }
+    } catch (error: any) {
+      console.error("Convert error:", error)
+      setConvertError(error?.message || "Failed to convert to private tokens. Please try again.")
+    } finally {
+      setIsConverting(false)
+    }
   }
 
   const handleTransfer = async () => {
@@ -251,6 +295,14 @@ export default function AppPage() {
                       </div>
                     </div>
 
+                    {/* Error Message */}
+                    {convertError && (
+                      <div className="p-3 border border-destructive/30 rounded-lg bg-destructive/10 flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        <p className="text-xs text-destructive">{convertError}</p>
+                      </div>
+                    )}
+
                     {/* Info */}
                     <div className="p-3 border border-accent/20 rounded-lg bg-accent/5 flex items-start gap-2">
                       <Info className="w-4 h-4 text-accent shrink-0 mt-0.5" />
@@ -420,34 +472,52 @@ export default function AppPage() {
         </div>
       </div>
 
-      {/* Success Modals */}
-      <Dialog open={showConvertSuccess} onOpenChange={setShowConvertSuccess}>
-        <DialogContent className="bg-card border-accent/30 max-w-md">
-          <DialogHeader>
-            <div className="flex justify-center mb-4">
-              <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center">
-                <CheckCircle2 className="w-8 h-8 text-accent" />
+          {/* Success Modals */}
+          <Dialog open={showConvertSuccess} onOpenChange={setShowConvertSuccess}>
+            <DialogContent className="bg-card border-accent/30 max-w-md">
+              <DialogHeader>
+                <div className="flex justify-center mb-4">
+                  <div className="w-16 h-16 rounded-full bg-accent/10 border-2 border-accent flex items-center justify-center">
+                    <CheckCircle2 className="w-8 h-8 text-accent" />
+                  </div>
+                </div>
+                <DialogTitle className="text-center text-2xl">Conversion Successful</DialogTitle>
+                <DialogDescription className="text-center">
+                  Your USDC has been successfully converted to private tokens. The backend is processing your deposit.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 mt-4">
+                <div className="p-4 bg-muted/20 rounded border border-white/5">
+                  <p className="text-xs font-mono text-muted-foreground mb-2">CONVERTED AMOUNT</p>
+                  <p className="text-2xl font-bold font-mono">{convertAmount} USDC</p>
+                  {convertTxHash && (
+                    <p className="text-xs text-accent font-mono mt-2">
+                      <a 
+                        href={`https://stellar.expert/explorer/testnet/tx/${convertTxHash}`} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="underline hover:no-underline"
+                      >
+                        View on Stellar Expert
+                      </a>
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Your private balance will be updated once the backend processes the deposit.
+                  </p>
+                </div>
+                <Button
+                  onClick={() => {
+                    setShowConvertSuccess(false)
+                    setConvertTxHash(null)
+                  }}
+                  className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
+                >
+                  Close
+                </Button>
               </div>
-            </div>
-            <DialogTitle className="text-center text-2xl">Conversion Successful</DialogTitle>
-            <DialogDescription className="text-center">
-              Your USDC has been successfully converted to private tokens.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 mt-4">
-            <div className="p-4 bg-muted/20 rounded border border-white/5">
-              <p className="text-xs font-mono text-muted-foreground mb-2">PRIVATE BALANCE</p>
-              <p className="text-2xl font-bold font-mono">{convertAmount} USDC</p>
-            </div>
-            <Button
-              onClick={() => setShowConvertSuccess(false)}
-              className="w-full bg-accent text-accent-foreground hover:bg-accent/90"
-            >
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+            </DialogContent>
+          </Dialog>
 
       <Dialog open={showTransferSuccess} onOpenChange={setShowTransferSuccess}>
         <DialogContent className="bg-card border-accent/30 max-w-md">
