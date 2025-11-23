@@ -7,7 +7,7 @@ import { ArrowDown, Info, CheckCircle2, Send, RefreshCw, ArrowUpDown, AlertCircl
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { BinaryText } from "@/components/binary-text"
 import { useWallet } from "@/hooks/use-wallet"
-import { getUSDCBalance, transferUSDC, isValidStellarAddress, convertToPrivate, getPrivateBalance } from "@/lib/stellar"
+import { getUSDCBalance, transferUSDC, isValidStellarAddress, convertToPrivate, getPrivateBalance, transferPrivate } from "@/lib/stellar"
 
 type ViewMode = "convert" | "transfer"
 
@@ -119,15 +119,20 @@ export default function AppPage() {
       return
     }
 
+    if (recipient === address) {
+      setTransferError("Cannot transfer to yourself")
+      return
+    }
+
     const amount = parseFloat(transferAmount)
     if (isNaN(amount) || amount <= 0) {
       setTransferError("Invalid amount")
       return
     }
 
-    const balance = parseFloat(publicBalance.replace(/,/g, ""))
+    const balance = parseFloat(privateBalance.replace(/,/g, ""))
     if (amount > balance) {
-      setTransferError("Insufficient balance")
+      setTransferError("Insufficient private balance")
       return
     }
 
@@ -136,20 +141,23 @@ export default function AppPage() {
     setTxHash(null)
 
     try {
-      const hash = await transferUSDC(address, recipient, transferAmount)
+      const hash = await transferPrivate(address, recipient, transferAmount)
       setTxHash(hash)
       setShowTransferSuccess(true)
       setTransferAmount("")
       setRecipient("")
       
-      // Refresh balance after transfer
+      // Refresh balances after transfer
       if (address) {
-        const newBalance = await getUSDCBalance(address)
-        setPublicBalance(newBalance)
+        // Refresh private balance (may take a moment for backend to process)
+        setTimeout(async () => {
+          const newPrivateBalance = await getPrivateBalance(address)
+          setPrivateBalance(newPrivateBalance)
+        }, 5000) // Wait 5 seconds for backend to process
       }
     } catch (error: any) {
       console.error("Transfer error:", error)
-      setTransferError(error?.message || "Failed to transfer USDC. Please try again.")
+      setTransferError(error?.message || "Failed to transfer private tokens. Please try again.")
     } finally {
       setIsTransferring(false)
     }
@@ -337,7 +345,7 @@ export default function AppPage() {
                       <div className="flex items-center justify-between mb-3">
                         <span className="text-xs font-mono uppercase tracking-wider text-accent">From (Private)</span>
                         <span className="text-xs text-accent/80">
-                          Balance: {parseFloat(publicBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
+                          Balance: {parseFloat(privateBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC
                         </span>
                       </div>
                       <div className="flex items-center gap-3">
@@ -363,8 +371,8 @@ export default function AppPage() {
                       </div>
                       <div className="mt-2 flex justify-end">
                         <button
-                          onClick={() => setTransferAmount(publicBalance)}
-                          disabled={!isConnected || parseFloat(publicBalance) === 0}
+                          onClick={() => setTransferAmount(privateBalance)}
+                          disabled={!isConnected || parseFloat(privateBalance) === 0}
                           className="px-3 py-1 text-xs font-semibold text-accent hover:bg-accent/10 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                           MAX

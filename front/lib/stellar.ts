@@ -620,7 +620,9 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
       return "0";
     }
 
-    // Step 2: Calculate user_index (keccak256 hash of encrypted_index)
+    // Step 2: Decrypt encrypted_index to get user_index
+    // The encrypted_index is encrypted with the server address hash
+    // We need to decrypt it to get the original message hash, which is the user_index
     const CryptoJS = await import("crypto-js");
 
     // Convert encrypted_index to hex string
@@ -643,19 +645,70 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
 
-    // Hash using keccak256 (SHA256 for now, but should be keccak256)
-    // Note: crypto-js doesn't have keccak256, so we'll use SHA256 as approximation
-    // In production, you'd want to use a proper keccak256 library
-    const userIndexHash = CryptoJS.SHA256(
-      CryptoJS.enc.Hex.parse(encryptedIndexHex)
+    // Get server manager address to decrypt the encrypted_index
+    const encryptedTokenContractForServer = getEncryptedTokenContract();
+    const serverManagerOperation =
+      encryptedTokenContractForServer.call("get_server_manager");
+
+    const serverManagerTx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(serverManagerOperation)
+      .setTimeout(30)
+      .build();
+
+    const serverManagerSim = await sorobanRpc.simulateTransaction(
+      serverManagerTx
     );
+    if (rpc.Api.isSimulationError(serverManagerSim)) {
+      console.error("Failed to get server manager for decryption");
+      return "0";
+    }
+
+    let serverManagerAddress: string;
+    try {
+      const retval = scValToNative(serverManagerSim.result!.retval);
+      if (typeof retval === "string") {
+        serverManagerAddress = retval;
+      } else if (retval instanceof Address) {
+        serverManagerAddress = retval.toString();
+      } else if (retval && typeof retval === "object" && "toString" in retval) {
+        serverManagerAddress = retval.toString();
+      } else {
+        return "0";
+      }
+    } catch (error) {
+      console.error("Error getting server manager address:", error);
+      return "0";
+    }
+
+    // Decrypt encrypted_index using server address hash (matching backend)
+    // The encryption key is SHA256(serverAddress)
+    const serverAddressHash = CryptoJS.SHA256(serverManagerAddress);
+    const decryptionKey = CryptoJS.enc.Hex.parse(serverAddressHash.toString());
+    const ivForIndex = CryptoJS.lib.WordArray.create([0, 0, 0, 0]); // Zero IV (matching backend)
+
+    // Create CipherParams for decryption
+    const encryptedParams = CryptoJS.lib.CipherParams.create({
+      ciphertext: CryptoJS.enc.Hex.parse(encryptedIndexHex),
+    });
+
+    // Decrypt to get the original message hash (which is the user_index)
+    const decryptedUserIndex = CryptoJS.AES.decrypt(encryptedParams, decryptionKey, {
+      iv: ivForIndex,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    });
+
+    // Convert decrypted result to Uint8Array (32 bytes)
     const userIndexArray = new Uint8Array(32);
-    const userIndexWords = userIndexHash.words;
-    for (let i = 0; i < 32; i++) {
+    const decryptedWords = decryptedUserIndex.words;
+    for (let i = 0; i < 32 && i < decryptedUserIndex.sigBytes; i++) {
       const wordIndex = i >>> 2;
       const byteIndex = i % 4;
       userIndexArray[i] =
-        (userIndexWords[wordIndex] >>> (24 - byteIndex * 8)) & 0xff;
+        (decryptedWords[wordIndex] >>> (24 - byteIndex * 8)) & 0xff;
     }
 
     // Step 3: Get encrypted balance using user_index
@@ -709,7 +762,7 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
     // Decrypt using address hash (matching backend EncryptionService)
     const addressHash = CryptoJS.SHA256(userAddress);
     const key = CryptoJS.enc.Hex.parse(addressHash.toString());
-    const iv = CryptoJS.lib.WordArray.create([0, 0, 0, 0]); // Zero IV
+    const ivForKey = CryptoJS.lib.WordArray.create([0, 0, 0, 0]); // Zero IV
 
     // Create CipherParams object for decryption
     const encryptedKeyParams = CryptoJS.lib.CipherParams.create({
@@ -717,7 +770,7 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
     });
 
     const decryptedKey = CryptoJS.AES.decrypt(encryptedKeyParams, key, {
-      iv: iv,
+      iv: ivForKey,
       mode: CryptoJS.mode.CBC,
       padding: CryptoJS.pad.Pkcs7,
     });
@@ -750,6 +803,7 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
 
     // AES-256-GCM format: iv (16 bytes) + authTag (16 bytes) + encrypted (rest)
     if (encryptedAmountArray.length < 32) {
+      console.error("Encrypted amount too short");
       return "0";
     }
 
@@ -757,47 +811,338 @@ export async function getPrivateBalance(userAddress: string): Promise<string> {
     const authTag = encryptedAmountArray.slice(16, 32);
     const encrypted = encryptedAmountArray.slice(32);
 
-    // Convert to crypto-js format for decryption
-    const iv_gcm_words = CryptoJS.lib.WordArray.create(iv_gcm);
-    const encrypted_words = CryptoJS.lib.WordArray.create(encrypted);
-    const symmetricKey_words = CryptoJS.lib.WordArray.create(symmetricKeyArray);
-
-    // Note: crypto-js doesn't support GCM directly, but we can try CBC as fallback
-    // For proper GCM, we'd need Web Crypto API
+    // Use Web Crypto API for proper GCM decryption
     try {
-      // Create CipherParams object for decryption
-      const encryptedParams = CryptoJS.lib.CipherParams.create({
-        ciphertext: encrypted_words,
-      });
-
-      const decrypted = CryptoJS.AES.decrypt(
-        encryptedParams,
-        symmetricKey_words,
-        {
-          iv: iv_gcm_words,
-          mode: CryptoJS.mode.CBC,
-          padding: CryptoJS.pad.Pkcs7,
-        }
+      // Import the key
+      const cryptoKey = await crypto.subtle.importKey(
+        "raw",
+        symmetricKeyArray,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
       );
 
-      const balanceString = decrypted.toString(CryptoJS.enc.Utf8);
-      if (!balanceString || balanceString.length === 0) {
+      // Combine encrypted data with auth tag for Web Crypto API
+      // Web Crypto API expects: encrypted data + auth tag (tag at the end)
+      const encryptedWithTag = new Uint8Array(encrypted.length + authTag.length);
+      encryptedWithTag.set(encrypted, 0);
+      encryptedWithTag.set(authTag, encrypted.length);
+
+      // Decrypt using Web Crypto API
+      // Note: Web Crypto API expects the auth tag to be appended to the ciphertext
+      const decrypted = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: iv_gcm,
+          tagLength: 128, // 16 bytes = 128 bits
+        },
+        cryptoKey,
+        encryptedWithTag
+      );
+
+      // Convert decrypted ArrayBuffer to string
+      const decryptedText = new TextDecoder().decode(decrypted);
+      if (!decryptedText || decryptedText.length === 0) {
+        console.error("Decrypted text is empty");
         return "0";
       }
 
       // Convert from smallest unit (18 decimals) to readable format
-      const balanceBigInt = BigInt(balanceString);
+      const balanceBigInt = BigInt(decryptedText);
       const balanceFormatted = (Number(balanceBigInt) / 1e18).toString();
 
       return balanceFormatted;
     } catch (error) {
-      console.error("Error decrypting balance:", error);
-      // Return "0" if decryption fails
-      return "0";
+      console.error("Error decrypting balance with Web Crypto API:", error);
+      // Fallback: try with crypto-js (CBC mode) - this might not work correctly for GCM
+      try {
+        const iv_gcm_words = CryptoJS.lib.WordArray.create(iv_gcm);
+        const encrypted_words = CryptoJS.lib.WordArray.create(encrypted);
+        const symmetricKey_words = CryptoJS.lib.WordArray.create(symmetricKeyArray);
+
+        const encryptedParams = CryptoJS.lib.CipherParams.create({
+          ciphertext: encrypted_words,
+        });
+
+        const decrypted = CryptoJS.AES.decrypt(
+          encryptedParams,
+          symmetricKey_words,
+          {
+            iv: iv_gcm_words,
+            mode: CryptoJS.mode.CBC,
+            padding: CryptoJS.pad.Pkcs7,
+          }
+        );
+
+        const balanceString = decrypted.toString(CryptoJS.enc.Utf8);
+        if (!balanceString || balanceString.length === 0) {
+          return "0";
+        }
+
+        const balanceBigInt = BigInt(balanceString);
+        const balanceFormatted = (Number(balanceBigInt) / 1e18).toString();
+        return balanceFormatted;
+      } catch (fallbackError) {
+        console.error("Fallback decryption also failed:", fallbackError);
+        return "0";
+      }
     }
   } catch (error) {
     console.error("Error getting private balance:", error);
     return "0";
+  }
+}
+
+/**
+ * Encrypt data for server using server address hash
+ * This matches the backend EncryptionService.encryptSymmetricKeyForAddress
+ */
+async function encryptForServer(
+  data: Uint8Array,
+  serverAddress: string
+): Promise<Uint8Array> {
+  const CryptoJS = await import("crypto-js");
+
+  // Hash the server address to create encryption key
+  const serverAddressHash = CryptoJS.SHA256(serverAddress);
+  const key = CryptoJS.enc.Hex.parse(serverAddressHash.toString());
+  const iv = CryptoJS.lib.WordArray.create([0, 0, 0, 0]); // Zero IV
+
+  // Convert data to WordArray
+  const dataWords = CryptoJS.lib.WordArray.create(data);
+
+  // Encrypt using AES-256-CBC
+  const encrypted = CryptoJS.AES.encrypt(dataWords, key, {
+    iv: iv,
+    mode: CryptoJS.mode.CBC,
+    padding: CryptoJS.pad.Pkcs7,
+  });
+
+  // Convert to Uint8Array
+  const encryptedWords = encrypted.ciphertext;
+  const encryptedArray = new Uint8Array(encryptedWords.sigBytes);
+  const words = encryptedWords.words;
+  for (let i = 0; i < encryptedWords.sigBytes; i++) {
+    const wordIndex = i >>> 2;
+    const byteIndex = i % 4;
+    encryptedArray[i] = (words[wordIndex] >>> (24 - byteIndex * 8)) & 0xff;
+  }
+
+  return encryptedArray;
+}
+
+/**
+ * Transfer private tokens to another user
+ * 1. Gets receiver's encrypted_index (or creates one if they haven't converted yet)
+ * 2. Encrypts receiver index and amount for server
+ * 3. Calls request_transfer on the encrypted token contract
+ * 4. Backend will process the event and update encrypted balances
+ */
+export async function transferPrivate(
+  senderAddress: string,
+  receiverAddress: string,
+  amount: string
+): Promise<string> {
+  try {
+    const kit = getStellarWalletsKit();
+    if (!kit) {
+      throw new Error("Wallet kit not available");
+    }
+
+    const server = getStellarServer();
+    const sorobanRpc = getSorobanRpc();
+    const encryptedTokenContract = getEncryptedTokenContract();
+
+    // Try to load the sender's account
+    let sourceAccount;
+    try {
+      sourceAccount = await server.loadAccount(senderAddress);
+    } catch {
+      const dummyKeypair = Keypair.random();
+      sourceAccount = {
+        accountId: () => dummyKeypair.publicKey(),
+        sequenceNumber: () => "0",
+        incrementSequenceNumber: () => {},
+      } as any;
+    }
+
+    // Get server manager address (needed for encryption)
+    const serverManagerOperation =
+      encryptedTokenContract.call("get_server_manager");
+
+    const serverManagerTx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(serverManagerOperation)
+      .setTimeout(30)
+      .build();
+
+    const serverManagerSim = await sorobanRpc.simulateTransaction(
+      serverManagerTx
+    );
+    if (rpc.Api.isSimulationError(serverManagerSim)) {
+      throw new Error("Failed to get server manager address");
+    }
+
+    let serverManagerAddress: string;
+    try {
+      const retval = scValToNative(serverManagerSim.result!.retval);
+      if (typeof retval === "string") {
+        serverManagerAddress = retval;
+      } else if (retval instanceof Address) {
+        serverManagerAddress = retval.toString();
+      } else if (retval && typeof retval === "object" && "toString" in retval) {
+        serverManagerAddress = retval.toString();
+      } else {
+        throw new Error("Invalid server manager address format");
+      }
+    } catch (error: any) {
+      throw new Error(`Failed to parse server manager address: ${error.message}`);
+    }
+
+    // Step 1: Get receiver's encrypted_index from contract
+    // If receiver hasn't converted yet, they won't have an encrypted_index
+    // In that case, we'll create one (but the backend might not recognize it)
+    const receiverAddressScVal = Address.fromString(receiverAddress).toScVal();
+    const getReceiverIndexTx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(
+        encryptedTokenContract.call(
+          "get_user_index_by_address",
+          receiverAddressScVal
+        )
+      )
+      .setTimeout(30)
+      .build();
+
+    const receiverIndexSim = await sorobanRpc.simulateTransaction(
+      getReceiverIndexTx
+    );
+
+    let receiverEncryptedIndex: Uint8Array;
+
+    if (
+      !rpc.Api.isSimulationError(receiverIndexSim) &&
+      receiverIndexSim.result?.retval
+    ) {
+      // Receiver has an encrypted_index, use it
+      const encryptedIndexBytes = scValToNative(
+        receiverIndexSim.result.retval
+      );
+      if (
+        Array.isArray(encryptedIndexBytes) &&
+        encryptedIndexBytes.length > 0
+      ) {
+        receiverEncryptedIndex = new Uint8Array(encryptedIndexBytes);
+      } else {
+        // Create new encrypted_index for receiver
+        receiverEncryptedIndex = await createEncryptedIndex(
+          receiverAddress,
+          serverManagerAddress
+        );
+      }
+    } else {
+      // Receiver doesn't have an encrypted_index yet, create one
+      receiverEncryptedIndex = await createEncryptedIndex(
+        receiverAddress,
+        serverManagerAddress
+      );
+    }
+
+    // Step 2: Encrypt receiver index for server
+    const encryptedReceiverIndex = await encryptForServer(
+      receiverEncryptedIndex,
+      serverManagerAddress
+    );
+
+    // Step 3: Encrypt amount for server
+    // Convert amount to string and then to bytes
+    const amountInSmallestUnit = BigInt(Math.floor(parseFloat(amount) * 1e18));
+    const amountString = amountInSmallestUnit.toString();
+    const amountBytes = new TextEncoder().encode(amountString);
+    const encryptedAmount = await encryptForServer(
+      amountBytes,
+      serverManagerAddress
+    );
+
+    // Step 4: Call request_transfer on the encrypted token contract
+    const senderAddressScVal = Address.fromString(senderAddress).toScVal();
+    const encryptedReceiverIndexScVal = nativeToScVal(encryptedReceiverIndex, {
+      type: "bytes",
+    });
+    const encryptedAmountScVal = nativeToScVal(encryptedAmount, {
+      type: "bytes",
+    });
+
+    const requestTransferTx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: STELLAR_NETWORK,
+    })
+      .addOperation(
+        encryptedTokenContract.call(
+          "request_transfer",
+          senderAddressScVal,
+          encryptedReceiverIndexScVal,
+          encryptedAmountScVal
+        )
+      )
+      .setTimeout(300)
+      .build();
+
+    // Simulate request_transfer
+    const transferSim = await sorobanRpc.simulateTransaction(requestTransferTx);
+    if (rpc.Api.isSimulationError(transferSim)) {
+      throw new Error(
+        `Transfer request simulation failed: ${transferSim.error}`
+      );
+    }
+
+    // Prepare request_transfer transaction
+    const preparedTransferTx = await sorobanRpc.prepareTransaction(
+      requestTransferTx
+    );
+
+    // Sign and submit request_transfer
+    const transferXdr = preparedTransferTx.toXDR();
+    const { signedTxXdr: signedTransferXdr } = await kit.signTransaction(
+      transferXdr,
+      {
+        networkPassphrase: STELLAR_NETWORK,
+      }
+    );
+
+    if (!signedTransferXdr) {
+      throw new Error("Transfer request transaction was not signed");
+    }
+
+    const signedTransferTx = TransactionBuilder.fromXDR(
+      signedTransferXdr,
+      STELLAR_NETWORK
+    );
+    const transferResponse = await sorobanRpc.sendTransaction(signedTransferTx);
+
+    if (transferResponse.errorResult) {
+      throw new Error(
+        `Transfer request failed: ${JSON.stringify(transferResponse.errorResult)}`
+      );
+    }
+
+    if (!transferResponse.hash) {
+      throw new Error("Transfer request submission failed: no hash returned");
+    }
+
+    // Wait for transfer request to be included
+    await waitForTransaction(transferResponse.hash, sorobanRpc);
+
+    return transferResponse.hash;
+  } catch (error: any) {
+    console.error("Error transferring private tokens:", error);
+    throw new Error(
+      error?.message || "Failed to transfer private tokens"
+    );
   }
 }
 
