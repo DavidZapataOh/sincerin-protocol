@@ -10,7 +10,7 @@ export class StellarUtils {
       id: event.id,
       type: event.type,
       ledger: event.ledger,
-      contractId: event.contractId,
+      contractId: event.contractId as any,
       topic: event.topic,
       value: event.value,
       txHash: event.txHash,
