@@ -91,8 +91,8 @@ export function EncryptionHighlight({ children }: { children: React.ReactNode })
       }
 
       // Get the selected text node
-      const textNode = range.startContainer
-      if (textNode.nodeType !== Node.TEXT_NODE) {
+      const node = range.startContainer
+      if (node.nodeType !== Node.TEXT_NODE) {
         stopEncryption()
         return
       }
@@ -100,6 +100,7 @@ export function EncryptionHighlight({ children }: { children: React.ReactNode })
       // Stop any existing encryption
       stopEncryption()
 
+      const textNode = node as Text
       const originalText = textNode.textContent || ""
       const startOffset = range.startOffset
       const endOffset = range.endOffset
