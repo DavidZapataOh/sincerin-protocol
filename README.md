@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/License-ISC-green)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Alpha-yellow)](https://github.com/DavidZapataOh/sincerin-protocol)
 
-*Zero-knowledge privacy for Stellar token transfers*
+_Zero-knowledge privacy for Stellar token transfers_
 
 [Website](#) • [Documentation](#) • [Contract](#) • [Twitter](https://x.com/sincerinprotocol)
 
@@ -24,6 +24,7 @@
 ### The Problem
 
 Public blockchains expose all transactions—anyone can see balances, payment recipients, and transaction history. For enterprises handling sensitive financial operations, this transparency creates:
+
 - **Security Risks**: Exposed financial data vulnerable to attacks
 - **Competitive Disadvantages**: Competitors can analyze transaction patterns
 - **Compliance Challenges**: Privacy regulations require data protection
@@ -31,6 +32,7 @@ Public blockchains expose all transactions—anyone can see balances, payment re
 ### Our Solution
 
 Sincerin Protocol brings **zero-knowledge privacy** to Stellar through:
+
 - **Encrypted User Indices**: Break the direct link between addresses and balances
 - **Encrypted Balances**: All amounts encrypted with AES-256-GCM
 - **Dual-Encrypted Keys**: Separate encryption for user and server access
@@ -96,17 +98,20 @@ Sincerin Protocol brings **zero-knowledge privacy** to Stellar through:
 ### Data Flow
 
 1. **User Initiates Convert**
+
    - Frontend transfers USDC to encrypted token contract
    - Calls `request_deposit()` with encrypted user index
    - Contract emits `deposit_requested` event
 
 2. **Backend Processing**
+
    - Event listener detects deposit request
    - Generates/retrieves symmetric key for user
    - Encrypts balance with AES-256-GCM
    - Encrypts keys for user and server separately
 
 3. **On-Chain Storage**
+
    - Backend calls `store_deposit()` on contract
    - Contract stores encrypted data on-chain
    - Emits `balance_stored` event
@@ -203,6 +208,7 @@ stellar contract invoke \
 ## 🛠️ Tech Stack
 
 ### Frontend
+
 - **Framework**: Next.js 16 (App Router)
 - **UI**: React 19, Tailwind CSS v4
 - **Wallet Integration**: Stellar Wallets Kit
@@ -211,6 +217,7 @@ stellar contract invoke \
 - **Animations**: framer-motion
 
 ### Backend
+
 - **Runtime**: Node.js
 - **Framework**: Express
 - **Language**: TypeScript
@@ -218,6 +225,7 @@ stellar contract invoke \
 - **Encryption**: Node.js crypto (AES-256-GCM)
 
 ### Smart Contracts
+
 - **Platform**: Soroban
 - **Language**: Rust
 - **SDK**: soroban-sdk v22.0.1
@@ -240,13 +248,16 @@ stellar contract invoke \
 ### Contract Functions
 
 #### User Functions
+
 - `authenticate_user(user: Address, encrypted_index: Bytes)` - Authenticate user with encrypted index
 - `request_deposit(user: Address, amount: i128, encrypted_index: Bytes)` - Request deposit and convert to private
 
 #### Server Functions
+
 - `store_deposit(...)` - Store encrypted balance data (server-only)
 
 #### View Functions
+
 - `get_user_index_by_address(user_address: Address) -> Bytes` - Get user's encrypted index
 - `get_encrypted_balance(user_index: BytesN<32>) -> EncryptedBalance` - Get encrypted balance
 - `encrypted_supply() -> i128` - Get total encrypted supply
@@ -275,6 +286,7 @@ stellar contract invoke \
 ⚠️ **Current Implementation**: This is an alpha/testnet version for demonstration purposes.
 
 **For Production:**
+
 - Replace hash-based encryption with proper ECIES
 - Use hardware security modules (HSM) for server keys
 - Implement key rotation mechanisms
@@ -345,6 +357,7 @@ cargo test
 ## 📈 Roadmap
 
 ### ✅ Completed (Alpha)
+
 - [x] Soroban smart contract deployment
 - [x] Frontend wallet integration
 - [x] Convert functionality (Public → Private)
@@ -354,12 +367,14 @@ cargo test
 - [x] Multi-wallet support
 
 ### 🚧 In Progress
+
 - [ ] Withdrawal mechanism (Private → Public)
 - [ ] Full zero-knowledge proof integration
 - [ ] Multi-token support
 - [ ] Production security hardening
 
 ### 🔮 Future
+
 - [ ] Mainnet deployment
 - [ ] Additional token support
 - [ ] Advanced privacy features
@@ -400,7 +415,7 @@ This project is licensed under the ISC License.
 
 - **GitHub**: [github.com/DavidZapataOh/sincerin-protocol](https://github.com/DavidZapataOh/sincerin-protocol)
 - **Twitter**: [@sincerinprotocol](https://x.com/sincerinprotocol)
-- **Contract**: [Stellar Expert](https://testnet.stellar.expert/contract/CC72T3L7KMCVJ2FSW4XIZCQFRNXCVLQGVR7AYMMMFWRQHHEWOFV4TDNS)
+- **Contract**: [Stellar Expert](https://testnet.stellar.expert/contract/CAOT53NBANPMUDQ7G43MYFZ3MATHO5IY73KGJZWWIBNFWVF5OFHV7UFH)
 
 ---
 
