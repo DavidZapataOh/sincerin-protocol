@@ -23,6 +23,15 @@ interface DepositEventData {
   encryptedIndex: Buffer;
 }
 
+interface TransferEventData {
+  transferId: string;
+  sender: string;
+  encryptedReceiverIndex: Buffer;
+  encryptedAmount: Buffer;
+  timestamp: bigint;
+  ledger: number;
+}
+
 export class StellarEncryptedTokenService {
   private server: rpc.Server;
   private serverKeypair: Keypair;
@@ -207,16 +216,70 @@ export class StellarEncryptedTokenService {
       }
       console.log(`   ✅ Deposit not yet completed, proceeding...`);
 
-      // Get or create symmetric key for user
-      let symmetricKey = this.userSymmetricKeys.get(depositData.user);
-      let currentBalance = this.userBalances.get(depositData.user) || BigInt(0);
+      // Get user index from contract first to fetch existing balance
+      console.log("\n   📋 Fetching user index from contract...");
+      const userIndexEncrypted = await this.getUserIndex(depositData.user);
 
-      if (!symmetricKey) {
-        console.log("   🔑 Generating new symmetric key for user...");
-        symmetricKey = EncryptionService.generateSymmetricKey();
-        this.userSymmetricKeys.set(depositData.user, symmetricKey);
+      if (!userIndexEncrypted || userIndexEncrypted.length === 0) {
+        console.error(
+          "   ❌ User index not found - user must authenticate first"
+        );
+        return;
+      }
+
+      // For testing: use encrypted index directly as user_index
+      // In production, this would be properly encrypted with server's public key
+      let userIndex: Buffer;
+      try {
+        // Try to decrypt user index
+        userIndex = EncryptionService.decryptUserIndex(
+          Buffer.from(userIndexEncrypted.slice(2), "hex"),
+          this.serverKeypair.secret()
+        );
+        console.log(
+          `   ✅ Decrypted user index: ${EncryptionService.toHex(userIndex)}`
+        );
+      } catch (error) {
+        // If decryption fails, use the encrypted index directly (for testing with dummy data)
+        console.log(
+          `   ⚠️  Decryption failed, using encrypted index directly (testing mode)`
+        );
+        userIndex = Buffer.from(userIndexEncrypted.slice(2), "hex");
+        console.log(
+          `   📝 Using user index: ${EncryptionService.toHex(userIndex)}`
+        );
+      }
+
+      // Fetch existing encrypted balance from blockchain
+      console.log("\n   📥 Fetching existing balance from blockchain...");
+      const existingBalance = await this.getEncryptedBalanceFromContract(userIndex);
+
+      let symmetricKey: Buffer;
+      let currentBalance = BigInt(0);
+
+      if (existingBalance && existingBalance.exists) {
+        console.log("   ✅ Found existing encrypted balance on-chain");
+
+        // Decrypt the symmetric key from the existing balance
+        const encryptedKeyForServer = Buffer.from(existingBalance.encrypted_key_server);
+        symmetricKey = EncryptionService.decryptSymmetricKeyForAddress(
+          encryptedKeyForServer,
+          this.serverKeypair.secret()
+        );
+
+        // Decrypt the current balance
+        const encryptedAmount = Buffer.from(existingBalance.encrypted_amount);
+        const decryptedBalance = EncryptionService.decryptWithSymmetricKey(
+          encryptedAmount,
+          symmetricKey
+        );
+        currentBalance = BigInt(decryptedBalance);
+
+        console.log(`   💰 Current balance on-chain: ${currentBalance.toString()}`);
       } else {
-        console.log("   🔑 Using existing symmetric key");
+        console.log("   🆕 No existing balance found, creating new");
+        symmetricKey = EncryptionService.generateSymmetricKey();
+        console.log("   🔑 Generated new symmetric key for user");
       }
 
       // Calculate new balance
@@ -254,40 +317,6 @@ export class StellarEncryptedTokenService {
       console.log(
         `   🔐 Encrypted key for server: ${encryptedKeyForServer.length} bytes`
       );
-
-      // Get user index from contract
-      console.log("\n   📋 Fetching user index from contract...");
-      const userIndexEncrypted = await this.getUserIndex(depositData.user);
-
-      if (!userIndexEncrypted || userIndexEncrypted.length === 0) {
-        console.error(
-          "   ❌ User index not found - user must authenticate first"
-        );
-        return;
-      }
-
-      // For testing: use encrypted index directly as user_index
-      // In production, this would be properly encrypted with server's public key
-      let userIndex: Buffer;
-      try {
-        // Try to decrypt user index
-        userIndex = EncryptionService.decryptUserIndex(
-          Buffer.from(userIndexEncrypted.slice(2), "hex"),
-          this.serverKeypair.secret()
-        );
-        console.log(
-          `   ✅ Decrypted user index: ${EncryptionService.toHex(userIndex)}`
-        );
-      } catch (error) {
-        // If decryption fails, use the encrypted index directly (for testing with dummy data)
-        console.log(
-          `   ⚠️  Decryption failed, using encrypted index directly (testing mode)`
-        );
-        userIndex = Buffer.from(userIndexEncrypted.slice(2), "hex");
-        console.log(
-          `   📝 Using user index: ${EncryptionService.toHex(userIndex)}`
-        );
-      }
 
       // Store encrypted data on-chain
       console.log("\n   📝 Storing encrypted data on-chain...");
@@ -344,6 +373,54 @@ export class StellarEncryptedTokenService {
     }
 
     return "";
+  }
+
+  /**
+   * Get encrypted balance from contract
+   */
+  private async getEncryptedBalanceFromContract(userIndex: Buffer): Promise<{
+    encrypted_amount: Uint8Array;
+    encrypted_key_user: Uint8Array;
+    encrypted_key_server: Uint8Array;
+    timestamp: number;
+    exists: boolean;
+  } | null> {
+    try {
+      const contract = new Contract(this.contractId);
+      const sourceAccount = await this.server.getAccount(
+        this.serverKeypair.publicKey()
+      );
+
+      const operation = contract.call(
+        "get_encrypted_balance",
+        nativeToScVal(userIndex, { type: "bytes" })
+      );
+
+      const transaction = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simulateResponse = await this.server.simulateTransaction(transaction);
+
+      if (rpc.Api.isSimulationError(simulateResponse)) {
+        throw new Error(`Simulation error: ${JSON.stringify(simulateResponse)}`);
+      }
+
+      const result = simulateResponse.result?.retval;
+      if (!result) {
+        return null;
+      }
+
+      const encryptedBalance = scValToNative(result);
+      return encryptedBalance;
+    } catch (error) {
+      console.error("Error getting encrypted balance from contract:", error);
+      return null;
+    }
   }
 
   /**
@@ -442,9 +519,9 @@ export class StellarEncryptedTokenService {
     console.log("   ✅ Simulation successful");
     console.log("   📋 Auth entries needed:", simulateResponse.result?.auth?.length || 0);
 
-    // Assemble transaction with auth from simulation
-    // This is critical: assembleTransaction adds the authorization entries from simulation
-    const assembledTx = rpc.assembleTransaction(transaction, simulateResponse).build();
+    // Use prepareTransaction which handles authorization signing automatically
+    // This is critical: prepareTransaction will add proper authorization signatures
+    const assembledTx = await this.server.prepareTransaction(transaction);
 
     console.log("   📋 Transaction operations:", assembledTx.operations.length);
 
@@ -512,5 +589,331 @@ export class StellarEncryptedTokenService {
 
   private sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Parse transfer_requested event
+   * Event structure: (transferId, sender, encryptedReceiverIndex, encryptedAmount)
+   */
+  async parseTransferEvent(
+    event: ParsedEvent
+  ): Promise<TransferEventData | null> {
+    try {
+      const eventData = StellarUtils.extractEventData(event);
+      const eventType = eventData.topics[0];
+
+      if (eventType !== "transfer_requested") {
+        console.error("Invalid event type:", eventType);
+        return null;
+      }
+
+      // Parse event data
+      // Event structure from contract: (transfer_id, sender, encrypted_receiver_index, encrypted_amount)
+      // All data is in the value array
+      const eventValue = eventData.data;
+
+      // Extract from value array
+      const transferId = Buffer.from(eventValue[0] as Uint8Array).toString("hex");
+      const sender = eventValue[1] as string;
+      const encryptedReceiverIndex = Buffer.from(eventValue[2] as Uint8Array);
+      const encryptedAmount = Buffer.from(eventValue[3] as Uint8Array);
+
+      console.log("\n📦 Transfer Event Parsed:");
+      console.log(`   Transfer ID: 0x${transferId}`);
+      console.log(`   Sender: ${sender}`);
+      console.log(`   Encrypted Receiver Index: ${encryptedReceiverIndex.toString("hex").substring(0, 32)}...`);
+      console.log(`   Encrypted Amount: ${encryptedAmount.toString("hex").substring(0, 32)}...`);
+
+      return {
+        transferId: `0x${transferId}`,
+        sender,
+        encryptedReceiverIndex,
+        encryptedAmount,
+        timestamp: BigInt(0), // Will be filled from transaction
+        ledger: 0,
+      };
+    } catch (error) {
+      console.error("Error parsing transfer event:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Check if transfer is already completed
+   */
+  private async isTransferCompleted(transferId: string): Promise<boolean> {
+    try {
+      const contract = new Contract(this.contractId);
+      const sourceAccount = await this.server.getAccount(
+        this.serverKeypair.publicKey()
+      );
+
+      // Convert transferId to BytesN<32>
+      const transferIdBuffer = transferId.startsWith("0x")
+        ? Buffer.from(transferId.slice(2), "hex")
+        : Buffer.from(transferId, "hex");
+
+      const operation = contract.call(
+        "transfer_completed",
+        nativeToScVal(transferIdBuffer, { type: "bytes" })
+      );
+
+      const transaction = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simulateResponse = await this.server.simulateTransaction(transaction);
+
+      if (rpc.Api.isSimulationError(simulateResponse)) {
+        return false;
+      }
+
+      const result = simulateResponse.result?.retval;
+      if (!result) {
+        return false;
+      }
+
+      return scValToNative(result) === true;
+    } catch (error) {
+      console.error("Error checking if transfer is completed:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Handle transfer request
+   * 1. Decrypt receiver index and amount
+   * 2. Get current balances for sender and receiver
+   * 3. Validate sender has sufficient balance
+   * 4. Calculate new balances
+   * 5. Re-encrypt both balances
+   * 6. Call process_transfer on contract
+   */
+  async handleTransferRequest(event: ParsedEvent): Promise<void> {
+    console.log("\n" + "=".repeat(70));
+    console.log("🔄 PROCESSING TRANSFER REQUEST");
+    console.log("=".repeat(70));
+
+    const transferData = await this.parseTransferEvent(event);
+    if (!transferData) {
+      console.error("❌ Failed to parse transfer event");
+      return;
+    }
+
+    // Check if already completed
+    const isCompleted = await this.isTransferCompleted(transferData.transferId);
+    if (isCompleted) {
+      console.log("⚠️  Transfer already completed, skipping");
+      return;
+    }
+
+    console.log("\n🔓 Step 1: Decrypting transfer data...");
+
+    // Decrypt receiver index
+    const receiverIndex = EncryptionService.decryptSymmetricKeyForAddress(
+      transferData.encryptedReceiverIndex,
+      this.serverKeypair.secret()
+    );
+    console.log(`   ✅ Decrypted receiver index: ${receiverIndex.toString("hex").substring(0, 32)}...`);
+
+    // Decrypt amount
+    const amountBytes = EncryptionService.decryptSymmetricKeyForAddress(
+      transferData.encryptedAmount,
+      this.serverKeypair.secret()
+    );
+    const transferAmount = BigInt(amountBytes.toString("utf8"));
+    console.log(`   ✅ Decrypted transfer amount: ${transferAmount.toString()} stroops`);
+
+    // Get sender's user index
+    console.log("\n📥 Step 2: Getting sender's user index...");
+    const senderIndexHex = await this.getUserIndex(transferData.sender);
+    if (!senderIndexHex) {
+      console.error("❌ Sender not authenticated");
+      return;
+    }
+    const senderIndex = Buffer.from(senderIndexHex.replace("0x", ""), "hex");
+    console.log(`   ✅ Sender index: ${senderIndexHex}`);
+
+    // Get current balances
+    console.log("\n💰 Step 3: Fetching current balances from blockchain...");
+
+    const senderBalance = await this.getEncryptedBalanceFromContract(senderIndex);
+    if (!senderBalance || !senderBalance.exists) {
+      console.error("❌ Sender has no balance");
+      return;
+    }
+
+    // Decrypt sender's current balance
+    const senderSymmetricKey = EncryptionService.decryptSymmetricKeyForAddress(
+      Buffer.from(senderBalance.encrypted_key_server),
+      this.serverKeypair.secret()
+    );
+    const senderCurrentBalance = BigInt(
+      EncryptionService.decryptWithSymmetricKey(
+        Buffer.from(senderBalance.encrypted_amount),
+        senderSymmetricKey
+      )
+    );
+    console.log(`   📊 Sender current balance: ${senderCurrentBalance.toString()} stroops`);
+
+    // Validate sender has sufficient balance
+    if (senderCurrentBalance < transferAmount) {
+      console.error(`❌ Insufficient balance. Has ${senderCurrentBalance}, needs ${transferAmount}`);
+      return;
+    }
+
+    // Get receiver's balance
+    const receiverBalance = await this.getEncryptedBalanceFromContract(receiverIndex);
+
+    let receiverSymmetricKey: Buffer;
+    let receiverCurrentBalance = BigInt(0);
+
+    if (receiverBalance && receiverBalance.exists) {
+      receiverSymmetricKey = EncryptionService.decryptSymmetricKeyForAddress(
+        Buffer.from(receiverBalance.encrypted_key_server),
+        this.serverKeypair.secret()
+      );
+      receiverCurrentBalance = BigInt(
+        EncryptionService.decryptWithSymmetricKey(
+          Buffer.from(receiverBalance.encrypted_amount),
+          receiverSymmetricKey
+        )
+      );
+      console.log(`   📊 Receiver current balance: ${receiverCurrentBalance.toString()} stroops`);
+    } else {
+      console.log("   🆕 Receiver has no existing balance, creating new");
+      receiverSymmetricKey = EncryptionService.generateSymmetricKey();
+    }
+
+    // Calculate new balances
+    console.log("\n🧮 Step 4: Calculating new balances...");
+    const senderNewBalance = senderCurrentBalance - transferAmount;
+    const receiverNewBalance = receiverCurrentBalance + transferAmount;
+
+    console.log(`   💸 Sender new balance: ${senderNewBalance.toString()} stroops`);
+    console.log(`   💰 Receiver new balance: ${receiverNewBalance.toString()} stroops`);
+
+    // Encrypt new balances
+    console.log("\n🔐 Step 5: Encrypting new balances...");
+
+    // For sender - reuse existing symmetric key
+    const senderEncryptedAmount = EncryptionService.encryptWithSymmetricKey(
+      senderNewBalance.toString(),
+      senderSymmetricKey
+    );
+    const senderEncryptedKeyUser = EncryptionService.encryptSymmetricKeyForAddress(
+      senderSymmetricKey,
+      transferData.sender
+    );
+    const senderEncryptedKeyServer = EncryptionService.encryptSymmetricKeyForAddress(
+      senderSymmetricKey,
+      this.serverKeypair.publicKey()
+    );
+
+    console.log("   ✅ Sender balance encrypted");
+
+    // For receiver - get receiver address first
+    // We need to find receiver's address from their user index
+    // This is a limitation - in production, you'd store user_index -> address mapping
+    // For now, we'll use the receiver's symmetric key encryption
+
+    const receiverEncryptedAmount = EncryptionService.encryptWithSymmetricKey(
+      receiverNewBalance.toString(),
+      receiverSymmetricKey
+    );
+    // Note: We can't encrypt for receiver's address without knowing it
+    // So we'll use server's address as placeholder for receiver's user key
+    const receiverEncryptedKeyUser = EncryptionService.encryptSymmetricKeyForAddress(
+      receiverSymmetricKey,
+      this.serverKeypair.publicKey() // Placeholder - ideally receiver's address
+    );
+    const receiverEncryptedKeyServer = EncryptionService.encryptSymmetricKeyForAddress(
+      receiverSymmetricKey,
+      this.serverKeypair.publicKey()
+    );
+
+    console.log("   ✅ Receiver balance encrypted");
+
+    // Call process_transfer on contract
+    console.log("\n📤 Step 6: Calling process_transfer on contract...");
+
+    const contract = new Contract(this.contractId);
+    const sourceAccount = await this.server.getAccount(
+      this.serverKeypair.publicKey()
+    );
+
+    // Convert transfer ID to BytesN<32>
+    const transferIdBuffer = Buffer.from(transferData.transferId.replace("0x", ""), "hex");
+
+    const operation = contract.call(
+      "process_transfer",
+      nativeToScVal(transferIdBuffer, { type: "bytes" }),
+      nativeToScVal(senderIndex, { type: "bytes" }),
+      nativeToScVal(receiverIndex, { type: "bytes" }),
+      nativeToScVal(senderEncryptedAmount, { type: "bytes" }),
+      nativeToScVal(senderEncryptedKeyUser, { type: "bytes" }),
+      nativeToScVal(senderEncryptedKeyServer, { type: "bytes" }),
+      nativeToScVal(receiverEncryptedAmount, { type: "bytes" }),
+      nativeToScVal(receiverEncryptedKeyUser, { type: "bytes" }),
+      nativeToScVal(receiverEncryptedKeyServer, { type: "bytes" })
+    );
+
+    const transaction = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    // Simulate
+    console.log("   🔍 Simulating transaction...");
+    const simulateResponse = await this.server.simulateTransaction(transaction);
+
+    if (rpc.Api.isSimulationError(simulateResponse)) {
+      console.error("   ❌ Simulation error:", JSON.stringify(simulateResponse, null, 2));
+      throw new Error(`Simulation error: ${JSON.stringify(simulateResponse)}`);
+    }
+
+    console.log("   ✅ Simulation successful");
+
+    // Assemble transaction with auth from simulation
+    const assembledTx = rpc.assembleTransaction(transaction, simulateResponse).build();
+
+    // Sign with server keypair
+    assembledTx.sign(this.serverKeypair);
+
+    console.log("   📝 Submitting transaction...");
+
+    // Submit
+    const sendResponse = await this.server.sendTransaction(assembledTx);
+
+    if (sendResponse.status !== "PENDING") {
+      console.error("   ❌ Transaction submission failed:", JSON.stringify(sendResponse, null, 2));
+      throw new Error(`Transaction submission failed: ${JSON.stringify(sendResponse)}`);
+    }
+
+    console.log(`   📝 Transaction submitted: ${sendResponse.hash}`);
+
+    // Wait for confirmation
+    const result = await this.waitForTransaction(sendResponse.hash);
+
+    if (result.status === "SUCCESS") {
+      console.log("   ✅ Transaction confirmed!");
+      console.log("\n🎉 TRANSFER COMPLETED SUCCESSFULLY!");
+      console.log("─".repeat(70));
+      console.log(`   Transfer ID: ${transferData.transferId}`);
+      console.log(`   Amount: ${transferAmount.toString()} stroops`);
+      console.log(`   Sender new balance: ${senderNewBalance.toString()} stroops`);
+      console.log(`   Receiver new balance: ${receiverNewBalance.toString()} stroops`);
+      console.log("─".repeat(70));
+    } else {
+      console.error("   ❌ Transaction failed:", JSON.stringify(result, null, 2));
+      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    }
   }
 }

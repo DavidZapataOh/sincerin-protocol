@@ -49,11 +49,37 @@ eventListener.registerHandler(
 );
 
 /**
+ * Handle transfer_requested events
+ * When a user requests a transfer, the server:
+ * 1. Decrypts the receiver index and amount
+ * 2. Gets current balances for sender and receiver
+ * 3. Validates sender has sufficient balance
+ * 4. Calculates new balances
+ * 5. Re-encrypts both balances
+ * 6. Calls process_transfer on contract
+ */
+eventListener.registerHandler(
+  "transfer_requested",
+  async (event: ParsedEvent) => {
+    console.log("\n🎯 Transfer requested event detected");
+    await encryptedTokenService.handleTransferRequest(event);
+  }
+);
+
+/**
  * Handle balance_stored events
  * Emitted after the server successfully stores encrypted data
  */
 eventListener.registerHandler("balance_stored", async (event: ParsedEvent) => {
   console.log("✅ Balance stored event:", event.id);
+});
+
+/**
+ * Handle transfer_completed events
+ * Emitted after the server successfully processes a transfer
+ */
+eventListener.registerHandler("transfer_completed", async (event: ParsedEvent) => {
+  console.log("✅ Transfer completed event:", event.id);
 });
 
 /**
@@ -169,7 +195,7 @@ app.listen(PORT, async () => {
     try {
       await eventListener.start();
       console.log("✅ Event listener started successfully");
-      console.log("📡 Listening for deposit requests...");
+      console.log("📡 Listening for deposit and transfer requests...");
       console.log("");
     } catch (error) {
       console.error("❌ Failed to start event listener:", error);
